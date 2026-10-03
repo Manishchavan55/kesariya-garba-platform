@@ -69,4 +69,4 @@ API: `http://localhost:5000`
 
 ## Requirements alignment
 
-The uploaded PDF describes a React frontend, Node.js backend, MySQL data model, online payment, QR generation/verification, gallery, sponsors, inquiries and a secure admin panel. Those modules are represented in the current implementation. fileciteturn23file1L5-L8
+The implementation follows the uploaded requirements for a React frontend, Node.js backend, MySQL data model, payment, QR generation/verification, gallery, sponsors, inquiries and an admin panel.
