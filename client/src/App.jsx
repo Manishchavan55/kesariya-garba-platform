@@ -17,7 +17,7 @@ const passes = [
   { id: 2, key: "season", name: "5-Day Season Pass", price: 5000, note: "All five Navrang nights", image: images[1].src, tone: "gold", best: true },
   { id: 3, key: "premium", name: "Premium / Corporate Pass", price: 50000, note: "Premium hospitality · group access", image: images[2].src, tone: "violet" }
 ];
-const faqs = [["What does my ticket include?", "Entry to the selected celebration and a digital QR pass for every confirmed booking."], ["Can I show the QR ticket on my phone?", "Yes. Keep the QR visible at entry. A used QR cannot be accepted twice."], ["Is payment real or demo?", "Demo payment is enabled for this build, so you can test the complete booking flow without a charge."], ["Is parking available?", "Yes. Current demo venue data includes parking and a map link."], ["Can I book for a group?", "Yes. Premium / Corporate Pass is available, or contact the organizer for a custom group booking."]];
+const faqs = [["What does my ticket include?", "Entry to the selected celebration and a digital QR pass for every confirmed booking."], ["Can I show the QR ticket on my phone?", "Yes. Keep the QR visible at entry. A used QR cannot be accepted twice."], ["Is payment real or demo?", "Razorpay Test Mode is used for this build. A QR ticket is issued only after successful payment verification."], ["Is parking available?", "Yes. Current venue data includes parking and a map link."], ["Can I book for a group?", "Yes. Premium / Corporate Pass is available, or contact the organizer for a custom group booking."]];
 const formatDate = value => new Date(value).toLocaleString("en-IN", { dateStyle: "full", timeStyle: "short" });
 const authHeaders = token => ({ Authorization: `Bearer ${token}`, "content-type": "application/json" });
 
@@ -31,7 +31,7 @@ function About() { return <section id="about" className="dark-page about-page"><
 
 function EventJourney({ onBook }) { const nights = ["VRINDAVAN", "RAJASTHANI ROYAL", "GUJARATI RANG", "BOLLYWOOD BEATS", "GRAND NAVRANG"]; return <section id="event" className="dark-page journey-page"><div className="section-intro centered"><span>THE SPIRITUAL JOURNEY</span><h2>FIVE NIGHTS.<br/><em>ONE EVOLVING SOUL.</em></h2><p>Move through the mandala and awaken each night's distinct ritual, colour, attire and energy.</p></div><div className="orbit-stage"><div className="orbit orbit-1"/><div className="orbit orbit-2"/><div className="orbit-center"><img src={images[0].src} alt="Garba circle"/><span>GARBA CIRCLE</span></div>{nights.map((night, i) => <div key={night} className={`night-node node-${i + 1}`}><small>DAY {i + 1}</small><b>{night}</b></div>)}</div><div className="journey-details"><div><small>FEATURED EVENT</small><h3>{event.title}</h3><p>{formatDate(event.event_date)} · {event.venue}, {event.city}</p></div><button className="gold-button" onClick={onBook}>CHOOSE YOUR PASS ↗</button></div></section>; }
 
-function Tickets({ onBook }) { return <section id="tickets" className="dark-page tickets-page"><div className="section-intro centered"><span>CHOOSE YOUR ENTRY</span><h2>YOUR PASS.<br/><em>YOUR CIRCLE.</em></h2><p>Pick a pass, enter your details and get your QR ticket. No complicated checkout.</p></div><div className="ticket-grid">{passes.map(pass => <article key={pass.id} className={`nav-ticket ${pass.tone}`}>{pass.best && <div className="ribbon">BEST VALUE</div>}<div className="ticket-image"><img src={pass.image} alt={pass.name}/></div><div className="ticket-content"><small>{pass.key === "day" ? "ONE NIGHT" : pass.key === "season" ? "ALL FIVE NIGHTS" : "PREMIUM HOSPITALITY"}</small><h3>{pass.name}</h3><strong>₹{pass.price.toLocaleString("en-IN")}</strong><p>{pass.note}</p><button onClick={() => onBook(pass)}>BOOK THIS PASS ↗</button></div></article>)}</div><div className="easy-book-strip"><div><span>READY TO GO?</span><h3>Book in under a minute.</h3><p>Choose your pass → enter details → confirm demo payment → receive QR.</p></div><button className="gold-button" onClick={() => onBook(passes[1])}>QUICK BOOK NOW ↗</button></div></section>; }
+function Tickets({ onBook }) { return <section id="tickets" className="dark-page tickets-page"><div className="section-intro centered"><span>CHOOSE YOUR ENTRY</span><h2>YOUR PASS.<br/><em>YOUR CIRCLE.</em></h2><p>Pick a pass, enter your details, pay securely with Razorpay and receive your QR ticket.</p></div><div className="ticket-grid">{passes.map(pass => <article key={pass.id} className={`nav-ticket ${pass.tone}`}>{pass.best && <div className="ribbon">BEST VALUE</div>}<div className="ticket-image"><img src={pass.image} alt={pass.name}/></div><div className="ticket-content"><small>{pass.key === "day" ? "ONE NIGHT" : pass.key === "season" ? "ALL FIVE NIGHTS" : "PREMIUM HOSPITALITY"}</small><h3>{pass.name}</h3><strong>₹{pass.price.toLocaleString("en-IN")}</strong><p>{pass.note}</p><button onClick={() => onBook(pass)}>BOOK THIS PASS ↗</button></div></article>)}</div><div className="easy-book-strip"><div><span>READY TO GO?</span><h3>Book in under a minute.</h3><p>Choose your pass → enter details → pay securely → receive your QR.</p></div><button className="gold-button" onClick={() => onBook(passes[1])}>QUICK BOOK NOW ↗</button></div></section>; }
 
 function Gallery() { const loop = [...images, ...images]; return <section id="gallery" className="dark-page gallery-page"><div className="section-intro gallery-intro"><span>THE NAVRANG FEELING</span><h2>MOMENTS IN MOTION.<br/><em>MEMORIES IN COLOUR.</em></h2></div><div className="gallery-marquee"><div className="gallery-track">{loop.map((image, i) => <a className="gallery-card" key={`${image.title}-${i}`} href={image.src} target="_blank" rel="noreferrer"><img src={image.src} alt={image.title}/><span>{image.title}</span></a>)}</div></div><div className="gallery-controls"><span>LIVE MOTION GALLERY</span><span>01 — 04</span></div></section>; }
 
@@ -39,9 +39,129 @@ function FAQ() { const [open, setOpen] = useState(0); return <section id="faq" c
 
 function Contact({ onSent }) { const [form, setForm] = useState({ name: "", email: "", phone: "", message: "" }); const [busy, setBusy] = useState(false); const submit = async e => { e.preventDefault(); setBusy(true); try { const response = await fetch(`${API_URL}/api/inquiries`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(form) }); const data = await response.json(); onSent(response.ok ? data.message : "Demo inquiry received."); } catch { onSent("Demo inquiry received. The organizer will follow up shortly."); } finally { setBusy(false); setForm({ name: "", email: "", phone: "", message: "" }); } }; return <section id="contact" className="contact-page"><div className="contact-wrap"><div><span className="gold-label">JOIN THE CIRCLE</span><h2>LET'S MAKE<br/><em>IT FESTIVE.</em></h2><p>For group bookings, sponsorships, partnerships or event questions, reach the Kesariya team.</p><div className="contact-list"><a href={whatsappUrl} target="_blank" rel="noreferrer">WHATSAPP <b>+91 90000 00000</b></a><a href="mailto:hello@kesariya.test">EMAIL <b>hello@kesariya.test</b></a><a href={mapsUrl} target="_blank" rel="noreferrer">VENUE <b>Grand Celebration Ground ↗</b></a></div></div><form onSubmit={submit} className="dark-form"><input required placeholder="Your name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}/><input required type="email" placeholder="Email address" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}/><input placeholder="Phone number" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })}/><textarea required rows="5" placeholder="Tell us what you need" value={form.message} onChange={e => setForm({ ...form, message: e.target.value })}/><button disabled={busy} className="gold-button">{busy ? "SENDING…" : "SEND INQUIRY ↗"}</button></form></div></section>; }
 
-function BookingModal({ initialPass, onClose, onSuccess, onError }) { const [passId, setPassId] = useState(initialPass?.id || 2); const [quantity, setQuantity] = useState(1); const [details, setDetails] = useState({ name: "", email: "", phone: "" }); const [busy, setBusy] = useState(false); const selected = passes.find(pass => pass.id === passId) || passes[1]; const total = selected.price * quantity;
-  const submit = async e => { e.preventDefault(); setBusy(true); try { const response = await fetch(`${API_URL}/api/bookings/confirm`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ eventId: event.id, ticketCategoryId: selected.id, customerName: details.name, customerEmail: details.email, customerPhone: details.phone, quantity }) }); const data = await response.json(); if (!response.ok) throw new Error(data.message || "Booking failed"); const bookingCode = data.qr; const qr = await QRCode.toDataURL(bookingCode, { margin: 1, width: 320 }); const booking = { code: bookingCode, qr, event, pass: selected, total: Number(data.booking.total_amount ?? total), quantity, details, createdAt: new Date().toISOString(), serverBacked: true }; localStorage.setItem(`kesariya-booking-${bookingCode}`, JSON.stringify(booking)); const saved = JSON.parse(localStorage.getItem("kesariya-bookings") || "[]"); localStorage.setItem("kesariya-bookings", JSON.stringify([booking, ...saved].slice(0, 50))); onSuccess(booking); } catch (error) { onError(error.message); } finally { setBusy(false); } };
-  return <div className="modal-backdrop"><form className="booking-modal quick-book-modal" onSubmit={submit}><button type="button" className="modal-close" onClick={onClose}>×</button><span className="gold-label">QUICK BOOKING · 3 STEPS</span><h2>Reserve your circle.</h2><p className="modal-meta">1. Choose pass · 2. Enter details · 3. Get QR ticket</p><div className="pass-switcher">{passes.map(pass => <button type="button" key={pass.id} className={pass.id === passId ? "active" : ""} onClick={() => setPassId(pass.id)}><b>{pass.name}</b><span>₹{pass.price.toLocaleString("en-IN")}</span></button>)}</div><div className="form-grid"><input autoFocus required placeholder="Full name" value={details.name} onChange={e => setDetails({ ...details, name: e.target.value })}/><input required type="email" placeholder="Email" value={details.email} onChange={e => setDetails({ ...details, email: e.target.value })}/><input required placeholder="Mobile number" value={details.phone} onChange={e => setDetails({ ...details, phone: e.target.value })}/><select value={quantity} onChange={e => setQuantity(Number(e.target.value))}>{Array.from({ length: 10 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n} booking unit{n > 1 ? "s" : ""}</option>)}</select></div><div className="booking-summary"><div><span>Event</span><b>{event.title}</b></div><div><span>When</span><b>24 Oct 2026 · 7:00 PM</b></div><div><span>Venue</span><b>{event.venue}, {event.city}</b></div><div className="booking-total"><span>Total</span><strong>₹{total.toLocaleString("en-IN")}</strong></div></div><button disabled={busy} className="gold-button full">{busy ? "CREATING YOUR QR…" : "CONFIRM BOOKING ↗"}</button><small className="demo-note">Demo payment mode · no real money is charged.</small></form></div>; }
+function BookingModal({ initialPass, onClose, onSuccess, onError }) {
+  const [passId, setPassId] = useState(initialPass?.id || 2);
+  const [quantity, setQuantity] = useState(1);
+  const [details, setDetails] = useState({ name: "", email: "", phone: "" });
+  const [busy, setBusy] = useState(false);
+  const selected = passes.find(pass => pass.id === passId) || passes[1];
+  const total = selected.price * quantity;
+
+  const submit = async e => {
+    e.preventDefault();
+    setBusy(true);
+
+    try {
+      const orderResponse = await fetch(`${API_URL}/api/bookings/order`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          eventId: event.id,
+          ticketCategoryId: selected.id,
+          quantity
+        })
+      });
+
+      const orderData = await orderResponse.json();
+      if (!orderResponse.ok) {
+        throw new Error(orderData.message || "Unable to create payment order");
+      }
+
+      if (orderData.mode !== "razorpay") {
+        throw new Error("Razorpay payment is not active. Set USE_MYSQL=true and configure Razorpay credentials on the server.");
+      }
+
+      if (!window.Razorpay) {
+        throw new Error("Razorpay Checkout did not load. Refresh the page and try again.");
+      }
+
+      const razorpay = new window.Razorpay({
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: orderData.currency || "INR",
+        name: "Kesariya Navrang",
+        description: selected.name,
+        order_id: orderData.orderId,
+        prefill: {
+          name: details.name,
+          email: details.email,
+          contact: details.phone
+        },
+        notes: {
+          eventId: String(event.id),
+          ticketCategoryId: String(selected.id),
+          quantity: String(quantity)
+        },
+        theme: { color: "#f6c43d" },
+        handler: async paymentResponse => {
+          try {
+            const response = await fetch(`${API_URL}/api/bookings/confirm`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                eventId: event.id,
+                ticketCategoryId: selected.id,
+                customerName: details.name,
+                customerEmail: details.email,
+                customerPhone: details.phone,
+                quantity,
+                razorpayOrderId: paymentResponse.razorpay_order_id,
+                razorpayPaymentId: paymentResponse.razorpay_payment_id,
+                razorpaySignature: paymentResponse.razorpay_signature
+              })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.message || "Payment verification failed");
+            }
+
+            const bookingCode = data.qr;
+            const qr = await QRCode.toDataURL(bookingCode, { margin: 1, width: 320 });
+            const booking = {
+              code: bookingCode,
+              qr,
+              event,
+              pass: selected,
+              total: Number(data.booking?.total_amount ?? total),
+              quantity,
+              details,
+              createdAt: new Date().toISOString(),
+              serverBacked: true,
+              paymentMode: "razorpay",
+              razorpayPaymentId: paymentResponse.razorpay_payment_id,
+              razorpayOrderId: paymentResponse.razorpay_order_id
+            };
+
+            localStorage.setItem(`kesariya-booking-${bookingCode}`, JSON.stringify(booking));
+            const saved = JSON.parse(localStorage.getItem("kesariya-bookings") || "[]");
+            localStorage.setItem("kesariya-bookings", JSON.stringify([booking, ...saved].slice(0, 50)));
+            onSuccess(booking);
+          } catch (error) {
+            onError(error.message);
+          } finally {
+            setBusy(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setBusy(false)
+        }
+      });
+
+      razorpay.on("payment.failed", response => {
+        setBusy(false);
+        onError(response.error?.description || "Payment failed. Please try again.");
+      });
+
+      razorpay.open();
+    } catch (error) {
+      setBusy(false);
+      onError(error.message);
+    }
+  };
+
+  return <div className="modal-backdrop"><form className="booking-modal quick-book-modal" onSubmit={submit}><button type="button" className="modal-close" onClick={onClose}>×</button><span className="gold-label">QUICK BOOKING · 4 STEPS</span><h2>Reserve your circle.</h2><p className="modal-meta">1. Choose pass · 2. Enter details · 3. Pay securely · 4. Get QR ticket</p><div className="pass-switcher">{passes.map(pass => <button type="button" key={pass.id} className={pass.id === passId ? "active" : ""} onClick={() => setPassId(pass.id)}><b>{pass.name}</b><span>₹{pass.price.toLocaleString("en-IN")}</span></button>)}</div><div className="form-grid"><input autoFocus required placeholder="Full name" value={details.name} onChange={e => setDetails({ ...details, name: e.target.value })}/><input required type="email" placeholder="Email" value={details.email} onChange={e => setDetails({ ...details, email: e.target.value })}/><input required placeholder="Mobile number" value={details.phone} onChange={e => setDetails({ ...details, phone: e.target.value })}/><select value={quantity} onChange={e => setQuantity(Number(e.target.value))}>{Array.from({ length: 10 }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n} booking unit{n > 1 ? "s" : ""}</option>)}</select></div><div className="booking-summary"><div><span>Event</span><b>{event.title}</b></div><div><span>When</span><b>24 Oct 2026 · 7:00 PM</b></div><div><span>Venue</span><b>{event.venue}, {event.city}</b></div><div className="booking-total"><span>Total</span><strong>₹{total.toLocaleString("en-IN")}</strong></div></div><button disabled={busy} className="gold-button full">{busy ? "OPENING PAYMENT…" : "PAY & GET QR ↗"}</button><small className="demo-note">Secure payment powered by Razorpay. Your QR ticket is issued only after successful payment.</small></form></div>;
+}
 
 function Confirmation({ booking, onClose }) { const downloadTicket = () => { const link = document.createElement("a"); link.href = booking.qr; link.download = `${booking.code}-qr.png`; link.click(); }; return <div className="modal-backdrop"><div className="confirmation-card"><div className="success-ring">✓</div><span className="gold-label">BOOKING CONFIRMED</span><h2>Your circle is reserved.</h2><p>{booking.pass.name} · {booking.details.name}</p><div className="booking-code">{booking.code}</div><img className="qr-image" src={booking.qr} alt="Booking QR code"/><p className="small-note">Show this QR at entry. It can be used only once.</p><div className="confirmation-actions"><button className="gold-button" onClick={downloadTicket}>SAVE QR</button><button className="text-link" onClick={onClose}>DONE</button></div></div></div>; }
 
