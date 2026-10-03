@@ -6,6 +6,8 @@ import "./reference-motion.css";
 import "./booking.css";
 import "./admin.css";
 import "./admin-fix.css";
+import "./runtime-enhancements.css";
+import "./runtime-enhancements.js";
 import App from "./App.jsx";
 
 createRoot(document.getElementById("root")).render(
