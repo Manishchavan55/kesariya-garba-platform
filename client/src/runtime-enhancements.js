@@ -1,6 +1,7 @@
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 const categoryMap = new Map();
+const normalize = value => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
 
 async function loadLiveTicketData() {
   try {
@@ -8,46 +9,72 @@ async function loadLiveTicketData() {
     if (!response.ok) return;
     const data = await response.json();
     const categories = Array.isArray(data.ticket_categories) ? data.ticket_categories : [];
+    categoryMap.clear();
     categories.forEach(category => categoryMap.set(Number(category.id), category));
     syncTicketCards(categories);
+    syncBookingModal();
   } catch {
     // The page remains usable in demo/offline mode with its bundled prices.
   }
 }
 
+function findCategoryForText(text) {
+  const wanted = normalize(text);
+  return [...categoryMap.values()].find(category => normalize(category.name) === wanted);
+}
+
 function syncTicketCards(categories) {
   const cards = [...document.querySelectorAll(".nav-ticket")];
-  cards.forEach((card, index) => {
-    const category = categories[index];
+  cards.forEach(card => {
+    const titleNode = card.querySelector(".ticket-content h3");
+    const category = findCategoryForText(titleNode?.textContent);
     if (!category) return;
     const price = Number(category.price || 0).toLocaleString("en-IN");
     const priceNode = card.querySelector(".ticket-content > strong");
     if (priceNode) priceNode.textContent = `₹${price}`;
-    const titleNode = card.querySelector(".ticket-content h3");
-    if (titleNode) titleNode.textContent = category.name;
+    titleNode.textContent = category.name;
     card.dataset.ticketCategoryId = String(category.id);
     card.dataset.ticketPrice = String(category.price);
   });
 }
 
 function syncBookingModal() {
-  const switcher = document.querySelector(".pass-switcher");
-  if (!switcher || categoryMap.size === 0) return;
+  const modal = document.querySelector(".quick-book-modal");
+  const switcher = modal?.querySelector(".pass-switcher");
+  if (!modal || !switcher || categoryMap.size === 0) return;
   const buttons = [...switcher.querySelectorAll("button")];
-  buttons.forEach((button, index) => {
-    const category = categoryMap.get(index + 1);
+  buttons.forEach(button => {
+    const category = findCategoryForText(button.querySelector("b")?.textContent);
     if (!category) return;
     const priceNode = button.querySelector("span");
     if (priceNode) priceNode.textContent = `₹${Number(category.price).toLocaleString("en-IN")}`;
   });
+
+  const activeButton = switcher.querySelector("button.active");
+  const activeCategory = findCategoryForText(activeButton?.querySelector("b")?.textContent);
+  const quantityNode = modal.querySelector("select");
+  const totalNode = modal.querySelector(".booking-total strong");
+  if (activeCategory && quantityNode && totalNode) {
+    const quantity = Math.max(1, Number(quantityNode.value || 1));
+    totalNode.textContent = `₹${(Number(activeCategory.price) * quantity).toLocaleString("en-IN")}`;
+  }
 }
 
 function observeReactUI() {
-  const observer = new MutationObserver(() => {
-    syncBookingModal();
-    syncTicketCards([...categoryMap.values()].filter(item => item.event_id === 1));
-  });
+  let scheduled = false;
+  const refresh = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      syncBookingModal();
+      syncTicketCards([...categoryMap.values()]);
+    });
+  };
+  const observer = new MutationObserver(refresh);
   observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("input", refresh, true);
+  document.addEventListener("change", refresh, true);
 }
 
 function enableSmoothNavigation() {
@@ -66,7 +93,8 @@ function enableSmoothNavigation() {
 
 function improveGalleryMotion() {
   const marquee = document.querySelector(".gallery-marquee");
-  if (!marquee) return;
+  if (!marquee || marquee.dataset.enhanced === "true") return;
+  marquee.dataset.enhanced = "true";
   marquee.setAttribute("aria-label", "Kesariya Navrang moving gallery");
   marquee.addEventListener("mouseenter", () => marquee.classList.add("is-paused"));
   marquee.addEventListener("mouseleave", () => marquee.classList.remove("is-paused"));
@@ -77,16 +105,14 @@ function improveGalleryMotion() {
 function improveForms() {
   document.addEventListener("submit", event => {
     const form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    if (form.classList.contains("booking-modal")) {
-      const phone = form.querySelector('input[placeholder="Mobile number"]');
-      if (phone && !/^[+]?\d[\d\s-]{7,14}$/.test(phone.value.trim())) {
-        event.preventDefault();
-        phone.setCustomValidity("Enter a valid mobile number.");
-        phone.reportValidity();
-      } else if (phone) {
-        phone.setCustomValidity("");
-      }
+    if (!(form instanceof HTMLFormElement) || !form.classList.contains("booking-modal")) return;
+    const phone = form.querySelector('input[placeholder="Mobile number"]');
+    if (phone && !/^[+]?\d[\d\s-]{7,14}$/.test(phone.value.trim())) {
+      event.preventDefault();
+      phone.setCustomValidity("Enter a valid mobile number.");
+      phone.reportValidity();
+    } else if (phone) {
+      phone.setCustomValidity("");
     }
   }, true);
 }
