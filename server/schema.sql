@@ -95,29 +95,20 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO events
-  (title, description, event_date, venue, city, parking_info, entry_guidelines, price, capacity, available_seats)
-SELECT
-  'Kesariya Grand Garba Night',
-  'A premium Navratri celebration with live garba, dandiya, folk beats, lights and food stalls.',
-  '2026-10-24 19:00:00',
-  'Grand Celebration Ground',
-  'Pune',
-  'On-site parking and paid overflow parking nearby.',
-  'Carry a valid booking QR. Gates open at 6:00 PM. No outside food or drinks.',
-  499.00, 2500, 2500
+INSERT INTO events (title, description, event_date, venue, city, parking_info, entry_guidelines, price, capacity, available_seats)
+SELECT 'Kesariya Grand Garba Night', 'A premium Navratri celebration with live garba, dandiya, folk beats, lights and food stalls.', '2026-10-24 19:00:00', 'Grand Celebration Ground', 'Pune', 'On-site parking and paid overflow parking nearby.', 'Carry a valid booking QR. Gates open at 6:00 PM. No outside food or drinks.', 1500.00, 2500, 2500
 WHERE NOT EXISTS (SELECT 1 FROM events WHERE title = 'Kesariya Grand Garba Night');
 
 SET @event_id = (SELECT id FROM events WHERE title = 'Kesariya Grand Garba Night' LIMIT 1);
 
 INSERT INTO ticket_categories (event_id, name, price, available_quantity)
-SELECT @event_id, 'Regular Pass', 499.00, 1800
-WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='Regular Pass');
+SELECT @event_id, 'Couple Day Pass', 1500.00, 1800
+WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='Couple Day Pass');
 
 INSERT INTO ticket_categories (event_id, name, price, available_quantity)
-SELECT @event_id, 'Couple Pass', 899.00, 500
-WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='Couple Pass');
+SELECT @event_id, '5-Day Season Pass', 5000.00, 500
+WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='5-Day Season Pass');
 
 INSERT INTO ticket_categories (event_id, name, price, available_quantity)
-SELECT @event_id, 'VIP Circle', 1499.00, 200
-WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='VIP Circle');
+SELECT @event_id, 'Premium / Corporate Pass', 50000.00, 200
+WHERE NOT EXISTS (SELECT 1 FROM ticket_categories WHERE event_id=@event_id AND name='Premium / Corporate Pass');
