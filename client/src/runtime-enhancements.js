@@ -1,3 +1,5 @@
+import QRCode from "qrcode";
+
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 const categoryMap = new Map();
@@ -48,6 +50,7 @@ function syncBookingModal() {
     if (!category) return;
     const priceNode = button.querySelector("span");
     if (priceNode) priceNode.textContent = `₹${Number(category.price).toLocaleString("en-IN")}`;
+    button.dataset.ticketCategoryId = String(category.id);
   });
 
   const activeButton = switcher.querySelector("button.active");
@@ -127,9 +130,133 @@ function addLiveStatus() {
   nav.appendChild(status);
 }
 
+function loadRazorpay() {
+  return new Promise((resolve, reject) => {
+    if (window.Razorpay) return resolve();
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Unable to load Razorpay Checkout."));
+    document.head.appendChild(script);
+  });
+}
+
+function closeBookingModal(form) {
+  const close = form?.querySelector(".modal-close");
+  if (close) close.click();
+}
+
+function showPaymentConfirmation(booking, details, selectedCategory, quantity, paymentMode) {
+  const existing = document.querySelector(".payment-confirmation-overlay");
+  existing?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-backdrop payment-confirmation-overlay";
+  overlay.innerHTML = `<div class="confirmation-card"><div class="success-ring">✓</div><span class="gold-label">BOOKING CONFIRMED</span><h2>Your circle is reserved.</h2><p>${selectedCategory.name} · ${details.name}</p><div class="booking-code">${booking.booking_code}</div><div class="payment-badge">${paymentMode === "razorpay" ? "PAYMENT VERIFIED" : "DEMO PAYMENT"}</div><img class="qr-image" alt="Booking QR code"/><p class="small-note">Show this QR at entry. It can be used only once.</p><div class="confirmation-actions"><button class="gold-button save-payment-qr">SAVE QR</button><button class="text-link close-payment-confirmation">DONE</button></div></div>`;
+  document.body.appendChild(overlay);
+  const image = overlay.querySelector(".qr-image");
+  QRCode.toDataURL(booking.booking_code, { margin: 1, width: 320 }).then(qr => {
+    image.src = qr;
+    const save = overlay.querySelector(".save-payment-qr");
+    save.addEventListener("click", () => { const link = document.createElement("a"); link.href = qr; link.download = `${booking.booking_code}-qr.png`; link.click(); });
+  });
+  overlay.querySelector(".close-payment-confirmation").addEventListener("click", () => overlay.remove());
+  overlay.querySelector(".payment-confirmation-overlay")?.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+}
+
+async function handleBookingSubmit(form) {
+  const inputs = form.querySelectorAll("input");
+  const name = form.querySelector('input[placeholder="Full name"]')?.value.trim();
+  const email = form.querySelector('input[type="email"]')?.value.trim();
+  const phone = form.querySelector('input[placeholder="Mobile number"]')?.value.trim();
+  const quantity = Math.max(1, Number(form.querySelector("select")?.value || 1));
+  const active = form.querySelector(".pass-switcher button.active");
+  const selectedCategory = findCategoryForText(active?.querySelector("b")?.textContent);
+  if (!name || !email || !phone || !selectedCategory) throw new Error("Please complete all booking details.");
+
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) { submitButton.disabled = true; submitButton.dataset.originalText = submitButton.textContent; submitButton.textContent = "CREATING PAYMENT…"; }
+
+  const orderResponse = await fetch(`${API_URL}/api/bookings/order`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ eventId: 1, ticketCategoryId: selectedCategory.id, customerName: name, customerEmail: email, customerPhone: phone, quantity })
+  });
+  const orderData = await orderResponse.json();
+  if (!orderResponse.ok) throw new Error(orderData.message || "Unable to create payment order.");
+
+  const details = { name, email, phone };
+  if (orderData.mode === "demo") {
+    const response = await fetch(`${API_URL}/api/bookings/confirm`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventId: 1, ticketCategoryId: selectedCategory.id, customerName: name, customerEmail: email, customerPhone: phone, quantity, paymentRef: orderData.orderId })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || "Booking failed.");
+    closeBookingModal(form);
+    showPaymentConfirmation(data.booking, details, selectedCategory, quantity, "demo");
+    return;
+  }
+
+  await loadRazorpay();
+  if (!window.Razorpay) throw new Error("Razorpay Checkout is unavailable.");
+  if (submitButton) submitButton.textContent = "OPENING SECURE CHECKOUT…";
+
+  await new Promise((resolve, reject) => {
+    const checkout = new window.Razorpay({
+      key: orderData.keyId,
+      amount: orderData.amount,
+      currency: orderData.currency || "INR",
+      name: "Kesariya Navrang 2026",
+      description: selectedCategory.name,
+      order_id: orderData.orderId,
+      prefill: { name, email, contact: phone },
+      theme: { color: "#d6a84f" },
+      modal: { ondismiss: () => reject(new Error("Payment was cancelled. No ticket was issued.")) },
+      handler: async payment => {
+        try {
+          const response = await fetch(`${API_URL}/api/bookings/confirm`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ eventId: 1, ticketCategoryId: selectedCategory.id, customerName: name, customerEmail: email, customerPhone: phone, quantity, razorpayOrderId: payment.razorpay_order_id, razorpayPaymentId: payment.razorpay_payment_id, razorpaySignature: payment.razorpay_signature })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.message || "Payment verification failed. No ticket was issued.");
+          closeBookingModal(form);
+          showPaymentConfirmation(data.booking, details, selectedCategory, quantity, "razorpay");
+          resolve();
+        } catch (error) { reject(error); }
+      }
+    });
+    checkout.on("payment.failed", response => reject(new Error(response.error?.description || "Payment failed. No ticket was issued.")));
+    checkout.open();
+  });
+}
+
+function enablePaymentBooking() {
+  document.addEventListener("submit", event => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement) || !form.classList.contains("booking-modal")) return;
+    const phone = form.querySelector('input[placeholder="Mobile number"]');
+    if (phone && !/^[+]?\d[\d\s-]{7,14}$/.test(phone.value.trim())) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    handleBookingSubmit(form).catch(error => {
+      const button = form.querySelector('button[type="submit"]');
+      if (button) { button.disabled = false; button.textContent = button.dataset.originalText || "PAY & GET QR ↗"; }
+      const notice = document.createElement("div");
+      notice.className = "error-box payment-error-toast";
+      notice.textContent = error.message || "Payment could not be completed.";
+      form.querySelector(".demo-note")?.before(notice);
+      setTimeout(() => notice.remove(), 5000);
+    });
+  }, true);
+}
+
 function boot() {
   enableSmoothNavigation();
   improveForms();
+  enablePaymentBooking();
   observeReactUI();
   loadLiveTicketData();
   setTimeout(() => {
