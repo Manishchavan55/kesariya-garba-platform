@@ -8,7 +8,6 @@ import crypto from "node:crypto";
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const useMySQL = String(process.env.USE_MYSQL || "false").toLowerCase() === "true";
-const isProduction = String(process.env.NODE_ENV || "development").toLowerCase() === "production";
 const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
 app.use(cors({ origin: clientUrl }));
 app.use(express.json());
@@ -106,13 +105,19 @@ function requireAdmin(req, res, next) {
   if (!verifyAdminToken(token)) return res.status(401).json({ message: "Admin authentication required" });
   next();
 }
-function verifyRazorpayPayment({ orderId, paymentId, signature }) {
+function verifyRazorpaySignature({ orderId, paymentId, signature }) {
   if (!razorpayConfigured || !orderId || !paymentId || !signature) return false;
   const expected = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET).update(`${orderId}|${paymentId}`).digest("hex");
   return timingSafeStringEqual(signature, expected);
 }
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, mode: useMySQL ? "mysql" : "demo", service: "kesariya-garba-platform", payments: useMySQL ? (razorpayConfigured ? "razorpay" : "not-configured") : "demo" }));
+app.get("/api/health", (_req, res) => res.json({
+  ok: true,
+  mode: useMySQL ? "mysql" : "demo",
+  service: "kesariya-garba-platform",
+  payments: useMySQL && razorpayConfigured ? "razorpay" : "disabled",
+  bookingFlow: "razorpay-verified-only"
+}));
 app.get("/api/events", async (_req, res) => { try { res.json(await loadEvents()); } catch (error) { res.status(500).json({ message: "Unable to load events", error: error.message }); } });
 app.get("/api/events/:id", async (req, res) => { try { const id = Number(req.params.id), events = await loadEvents(), event = events.find(item => Number(item.id) === id); if (!event) return res.status(404).json({ message: "Event not found" }); const categories = useMySQL ? (await dbQuery("SELECT * FROM ticket_categories WHERE event_id=? ORDER BY price", [id]))[0] : store.ticketCategories.filter(item => item.event_id === id); res.json({ ...event, ticket_categories: categories }); } catch (error) { res.status(500).json({ message: "Unable to load event", error: error.message }); } });
 app.get("/api/gallery", (_req, res) => res.json(store.gallery));
@@ -122,62 +127,92 @@ app.post("/api/inquiries", (req, res) => { const { name, email, phone = "", mess
 app.post("/api/bookings/order", async (req, res) => {
   try {
     const { eventId, ticketCategoryId, quantity = 1 } = req.body, qty = Number(quantity);
+    console.log(`[PAYMENT] order requested event=${eventId} category=${ticketCategoryId} quantity=${qty}`);
+    if (!useMySQL || !razorpayConfigured) return res.status(503).json({ message: "Razorpay payment is not configured. Booking creation is disabled until MySQL and Razorpay are enabled." });
     if (!eventId || !Number.isInteger(qty) || qty < 1 || qty > 10) return res.status(400).json({ message: "Choose between 1 and 10 tickets." });
     const events = await loadEvents(), event = events.find(item => Number(item.id) === Number(eventId));
     if (!event) return res.status(404).json({ message: "Event not found" });
-    const categories = useMySQL ? (await dbQuery("SELECT * FROM ticket_categories WHERE event_id=? ORDER BY price", [eventId]))[0] : store.ticketCategories.filter(item => item.event_id === Number(eventId));
-    const category = categories.find(item => Number(item.id) === Number(ticketCategoryId)) || categories[0];
+    const [categories] = await dbQuery("SELECT * FROM ticket_categories WHERE event_id=? ORDER BY price", [eventId]);
+    const category = categories.find(item => Number(item.id) === Number(ticketCategoryId));
     if (!category) return res.status(400).json({ message: "Ticket category not found" });
     if (Number(category.available_quantity) < qty) return res.status(409).json({ message: "Not enough tickets available" });
     const amount = Math.round(Number(category.price) * qty * 100);
-    if (useMySQL) {
-      if (!razorpay) return res.status(503).json({ message: "Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET before enabling MySQL production payments." });
-      const order = await razorpay.orders.create({ amount, currency: "INR", receipt: `garba_${Date.now()}`, notes: { eventId: String(eventId), ticketCategoryId: String(category.id), quantity: String(qty) } });
-      return res.json({ mode: "razorpay", orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID });
-    }
-    res.json({ mode: "demo", orderId: `demo_order_${Date.now()}`, amount, currency: "INR", keyId: null, message: "Demo payment mode is active. No real money will be charged." });
-  } catch (error) { res.status(500).json({ message: "Unable to create payment order", error: error.message }); }
+    const order = await razorpay.orders.create({ amount, currency: "INR", receipt: `garba_${Date.now()}`, notes: { eventId: String(eventId), ticketCategoryId: String(category.id), quantity: String(qty) } });
+    console.log(`[PAYMENT] Razorpay order created order=${order.id} amount=${order.amount}`);
+    return res.json({ mode: "razorpay", orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID });
+  } catch (error) { console.error("[PAYMENT] order creation failed", error.message); res.status(500).json({ message: "Unable to create payment order", error: error.message }); }
 });
-
-function createBooking({ eventId, ticketCategoryId, customerName, customerEmail, customerPhone, quantity, totalAmount, transactionRef }) {
-  const event = store.events.find(item => Number(item.id) === Number(eventId)), category = store.ticketCategories.find(item => Number(item.id) === Number(ticketCategoryId));
-  if (!event || !category) throw new Error("Event or ticket category not found");
-  if (event.available_seats < quantity || category.available_quantity < quantity) throw new Error("Not enough tickets available");
-  event.available_seats -= quantity; category.available_quantity -= quantity;
-  const id = nextId(store.bookings) + 1000;
-  const booking = { id, booking_code: `KGR-${new Date().getFullYear()}-${String(id).padStart(5, "0")}`, event_id: event.id, ticket_category_id: category.id, customer_name: customerName, customer_email: customerEmail, customer_phone: customerPhone, quantity, total_amount: totalAmount, status: "confirmed", created_at: new Date().toISOString() };
-  store.bookings.push(booking); store.payments.push({ id: nextId(store.payments), booking_id: id, transaction_ref: transactionRef, amount: totalAmount, payment_status: "success", gateway: "dummy" }); store.qrTickets.push({ id: nextId(store.qrTickets), booking_id: id, qr_token: booking.booking_code, verification_status: "unused", scanned_at: null }); return booking;
-}
 
 app.post("/api/bookings/confirm", async (req, res) => {
   try {
-    const { eventId, ticketCategoryId, customerName, customerEmail, customerPhone, quantity = 1, paymentRef, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body || {};
+    const { eventId, ticketCategoryId, customerName, customerEmail, customerPhone, quantity = 1, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body || {};
     const qty = Number(quantity);
+    console.log(`[BOOKING] confirm requested order=${razorpayOrderId || "missing"} payment=${razorpayPaymentId || "missing"}`);
+    if (!useMySQL || !razorpayConfigured) return res.status(503).json({ message: "Razorpay payment is required. Demo/direct booking is disabled." });
     if (!eventId || !ticketCategoryId || !customerName || !customerEmail || !customerPhone || !Number.isInteger(qty) || qty < 1 || qty > 10) return res.status(400).json({ message: "Please complete all booking details." });
-    if (!useMySQL) {
-      const category = store.ticketCategories.find(item => item.id === Number(ticketCategoryId));
-      const totalAmount = Number(category?.price || 0) * qty;
-      const booking = createBooking({ eventId, ticketCategoryId, customerName, customerEmail, customerPhone, quantity: qty, totalAmount, transactionRef: paymentRef || `DUMMY-${Date.now()}` });
-      return res.status(201).json({ message: "Booking confirmed", booking, qr: booking.booking_code, paymentMode: "demo" });
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) return res.status(402).json({ message: "Payment required. Complete Razorpay Checkout before confirming the booking." });
+
+    const [[event]] = await dbQuery("SELECT * FROM events WHERE id=?", [eventId]);
+    const [[category]] = await dbQuery("SELECT * FROM ticket_categories WHERE id=? AND event_id=?", [ticketCategoryId, eventId]);
+    if (!event || !category) return res.status(404).json({ message: "Event or ticket category not found" });
+    if (Number(category.available_quantity) < qty) return res.status(409).json({ message: "Not enough tickets available" });
+    const expectedAmount = Math.round(Number(category.price) * qty * 100);
+
+    console.log(`[PAYMENT] signature verification started order=${razorpayOrderId} payment=${razorpayPaymentId}`);
+    if (!verifyRazorpaySignature({ orderId: razorpayOrderId, paymentId: razorpayPaymentId, signature: razorpaySignature })) {
+      console.warn(`[PAYMENT] signature verification failed order=${razorpayOrderId} payment=${razorpayPaymentId}`);
+      return res.status(402).json({ message: "Payment verification failed. Complete Razorpay Checkout before confirming the booking." });
     }
-    if (!verifyRazorpayPayment({ orderId: razorpayOrderId, paymentId: razorpayPaymentId, signature: razorpaySignature })) return res.status(402).json({ message: "Payment verification failed. Complete Razorpay Checkout before confirming the booking." });
+
+    const order = await razorpay.orders.fetch(razorpayOrderId);
+    const payment = await razorpay.payments.fetch(razorpayPaymentId);
+    const notes = order.notes || {};
+    const orderValid = order.id === razorpayOrderId
+      && Number(order.amount) === expectedAmount
+      && order.currency === "INR"
+      && String(notes.eventId) === String(eventId)
+      && String(notes.ticketCategoryId) === String(ticketCategoryId)
+      && Number(notes.quantity) === qty;
+    const paymentValid = payment.id === razorpayPaymentId
+      && payment.order_id === razorpayOrderId
+      && Number(payment.amount) === expectedAmount
+      && payment.currency === "INR"
+      && payment.status === "captured";
+    if (!orderValid || !paymentValid) {
+      console.warn(`[PAYMENT] payment/order validation failed order=${razorpayOrderId} payment=${razorpayPaymentId} orderStatus=${order.status} paymentStatus=${payment.status}`);
+      return res.status(402).json({ message: "Payment could not be verified for this booking." });
+    }
+    console.log(`[PAYMENT] signature and payment verified order=${razorpayOrderId} payment=${razorpayPaymentId}`);
+
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      const [[event]] = await connection.query("SELECT * FROM events WHERE id=? FOR UPDATE", [eventId]);
-      const [[category]] = await connection.query("SELECT * FROM ticket_categories WHERE id=? AND event_id=? FOR UPDATE", [ticketCategoryId, eventId]);
-      if (!event || !category) throw new Error("Event or ticket category not found");
-      if (event.available_seats < qty || category.available_quantity < qty) throw new Error("Not enough tickets available");
-      const totalAmount = Number(category.price) * qty, bookingCode = `KGR-${Date.now()}`;
+      const [[existingPayment]] = await connection.query("SELECT p.booking_id,b.booking_code,b.total_amount,b.customer_name FROM payments p JOIN bookings b ON b.id=p.booking_id WHERE p.transaction_ref=? LIMIT 1", [razorpayPaymentId]);
+      if (existingPayment) {
+        const [[qr]] = await connection.query("SELECT qr_token FROM qr_tickets WHERE booking_id=? LIMIT 1", [existingPayment.booking_id]);
+        await connection.commit();
+        console.log(`[BOOKING] existing verified booking returned booking=${existingPayment.booking_code}`);
+        return res.status(200).json({ message: "Booking already confirmed", booking: existingPayment, qr: qr?.qr_token, paymentMode: "razorpay" });
+      }
+
+      const [[lockedEvent]] = await connection.query("SELECT * FROM events WHERE id=? FOR UPDATE", [eventId]);
+      const [[lockedCategory]] = await connection.query("SELECT * FROM ticket_categories WHERE id=? AND event_id=? FOR UPDATE", [ticketCategoryId, eventId]);
+      if (!lockedEvent || !lockedCategory) throw new Error("Event or ticket category not found");
+      if (lockedEvent.available_seats < qty || lockedCategory.available_quantity < qty) throw new Error("Not enough tickets available");
+      const totalAmount = Number(lockedCategory.price) * qty;
+      const bookingCode = `KGR-${Date.now()}`;
+
+      console.log(`[BOOKING] creating booking payment=${razorpayPaymentId}`);
       const [bookingResult] = await connection.query("INSERT INTO bookings (booking_code,event_id,ticket_category_id,customer_name,customer_email,customer_phone,quantity,total_amount,status) VALUES (?,?,?,?,?,?,?,?,?)", [bookingCode, eventId, ticketCategoryId, customerName, customerEmail, customerPhone, qty, totalAmount, "confirmed"]);
       await connection.query("UPDATE events SET available_seats=available_seats-? WHERE id=?", [qty, eventId]);
       await connection.query("UPDATE ticket_categories SET available_quantity=available_quantity-? WHERE id=?", [qty, ticketCategoryId]);
       await connection.query("INSERT INTO payments (booking_id,transaction_ref,amount,payment_status,gateway) VALUES (?,?,?,?,?)", [bookingResult.insertId, razorpayPaymentId, totalAmount, "success", "razorpay"]);
+      console.log(`[QR] generating QR booking=${bookingCode}`);
       await connection.query("INSERT INTO qr_tickets (booking_id,qr_token,verification_status) VALUES (?,?,?)", [bookingResult.insertId, bookingCode, "unused"]);
       await connection.commit();
       res.status(201).json({ message: "Booking confirmed", booking: { id: bookingResult.insertId, booking_code: bookingCode, total_amount: totalAmount, customer_name: customerName }, qr: bookingCode, paymentMode: "razorpay" });
     } catch (error) { await connection.rollback(); res.status(409).json({ message: error.message }); } finally { connection.release(); }
-  } catch (error) { res.status(500).json({ message: "Unable to confirm booking", error: error.message }); }
+  } catch (error) { console.error("[BOOKING] confirmation failed", error.message); res.status(500).json({ message: "Unable to confirm booking", error: error.message }); }
 });
 
 app.get("/api/bookings/:code", async (req, res) => { try { if (!useMySQL) { const booking = store.bookings.find(item => item.booking_code === req.params.code); if (!booking) return res.status(404).json({ message: "Booking not found" }); return res.json({ booking, event: store.events.find(item => item.id === booking.event_id), qr: store.qrTickets.find(item => item.booking_id === booking.id) }); } const [[booking]] = await dbQuery("SELECT * FROM bookings WHERE booking_code=?", [req.params.code]); if (!booking) return res.status(404).json({ message: "Booking not found" }); const [[event]] = await dbQuery("SELECT * FROM events WHERE id=?", [booking.event_id]); const [[qr]] = await dbQuery("SELECT * FROM qr_tickets WHERE booking_id=?", [booking.id]); res.json({ booking, event, qr }); } catch (error) { res.status(500).json({ message: "Unable to load booking", error: error.message }); } });
@@ -188,7 +223,6 @@ app.post("/api/admin/login", (req, res) => {
   if (timingSafeStringEqual(email, adminEmail) && verifyPassword(password)) return res.json({ token: signAdminToken(email), user: { name: "Kesariya Admin", email } });
   res.status(401).json({ message: "Invalid admin credentials" });
 });
-
 app.get("/api/admin/dashboard", requireAdmin, async (_req, res) => { try { if (useMySQL) { const [[summary]] = await dbQuery("SELECT COUNT(*) bookings,COALESCE(SUM(quantity),0) ticketsSold,COALESCE(SUM(total_amount),0) revenue FROM bookings WHERE status='confirmed'"); const [[qr]] = await dbQuery("SELECT COUNT(*) qrUsed FROM qr_tickets WHERE verification_status='used'"); const [[inq]] = await dbQuery("SELECT COUNT(*) inquiries FROM inquiries WHERE status='new'"); const [[events]] = await dbQuery("SELECT COUNT(*) events FROM events"); return res.json({ ...summary, ...qr, ...inq, ...events }); } const confirmed = store.bookings.filter(booking => booking.status === "confirmed"); res.json({ events: store.events.length, bookings: confirmed.length, ticketsSold: confirmed.reduce((sum, booking) => sum + booking.quantity, 0), revenue: confirmed.reduce((sum, booking) => sum + Number(booking.total_amount), 0), inquiries: store.inquiries.filter(item => item.status === "new").length, qrUsed: store.qrTickets.filter(item => item.verification_status === "used").length }); } catch (error) { res.status(500).json({ message: "Unable to load dashboard", error: error.message }); } });
 app.get("/api/admin/bookings", requireAdmin, async (_req, res) => { try { if (!useMySQL) return res.json(store.bookings.map(booking => ({ ...booking, event: store.events.find(item => item.id === booking.event_id), qr: store.qrTickets.find(item => item.booking_id === booking.id) }))); const [rows] = await dbQuery("SELECT b.*,e.title event_title,tc.name ticket_name,q.verification_status,q.scanned_at FROM bookings b JOIN events e ON e.id=b.event_id LEFT JOIN ticket_categories tc ON tc.id=b.ticket_category_id LEFT JOIN qr_tickets q ON q.booking_id=b.id ORDER BY b.created_at DESC"); res.json(rows); } catch (error) { res.status(500).json({ message: "Unable to load bookings", error: error.message }); } });
 app.get("/api/admin/ticket-categories", requireAdmin, async (_req, res) => { try { if (useMySQL) { const [rows] = await dbQuery("SELECT tc.*,e.title event_title FROM ticket_categories tc JOIN events e ON e.id=tc.event_id ORDER BY e.event_date,tc.price"); return res.json(rows); } res.json(store.ticketCategories.map(category => ({ ...category, event_title: store.events.find(event => event.id === category.event_id)?.title || "Event" }))); } catch (error) { res.status(500).json({ message: "Unable to load ticket prices", error: error.message }); } });
@@ -200,4 +234,4 @@ app.get("/api/admin/events", requireAdmin, async (_req, res) => { try { res.json
 app.post("/api/admin/events", requireAdmin, async (req, res) => { const { title, event_date, venue, city, price, capacity } = req.body || {}; if (!title || !event_date || !venue || !city || !price || !capacity) return res.status(400).json({ message: "Complete event fields are required" }); try { if (useMySQL) { const [result] = await dbQuery("INSERT INTO events (title,description,event_date,venue,city,parking_info,entry_guidelines,price,capacity,available_seats) VALUES (?,?,?,?,?,?,?,?,?,?)", [title, "Event created from admin panel.", event_date, venue, city, "Parking available at venue.", "Carry your QR ticket.", Number(price), Number(capacity), Number(capacity)]); const [rows] = await dbQuery("SELECT * FROM events WHERE id=?", [result.insertId]); await dbQuery("INSERT INTO ticket_categories (event_id,name,price,available_quantity) VALUES (?,?,?,?)", [result.insertId, "Regular Pass", Number(price), Number(capacity)]); return res.status(201).json(rows[0]); } const event = { id: nextId(store.events), title, description: "Demo event created from admin panel.", event_date, venue, city, parking_info: "Parking available at venue.", entry_guidelines: "Carry your QR ticket.", price: Number(price), capacity: Number(capacity), available_seats: Number(capacity) }; store.events.push(event); store.ticketCategories.push({ id: nextId(store.ticketCategories), event_id: event.id, name: "Regular Pass", price: Number(price), available_quantity: Number(capacity) }); res.status(201).json(event); } catch (error) { res.status(500).json({ message: "Unable to create event", error: error.message }); } });
 app.post("/api/turnstile/verify", async (req, res) => { const token = req.body?.token; if (!token) return res.status(400).json({ success: false, message: "Turnstile token is required" }); if (!process.env.TURNSTILE_SECRET_KEY) return res.json({ success: true, bypassed: true }); try { const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret: process.env.TURNSTILE_SECRET_KEY, response: token, remoteip: req.ip }) }); res.json(await response.json()); } catch (error) { res.status(500).json({ success: false, message: "Turnstile verification failed", error: error.message }); } });
 
-app.listen(port, () => console.log(`Kesariya Garba API listening on http://localhost:${port} (${useMySQL ? "MySQL" : "demo data"} mode)`));
+app.listen(port, () => console.log(`Kesariya Garba API listening on http://localhost:${port} (${useMySQL ? "MySQL" : "demo data"} mode; payments ${razorpayConfigured && useMySQL ? "razorpay" : "disabled"})`));
